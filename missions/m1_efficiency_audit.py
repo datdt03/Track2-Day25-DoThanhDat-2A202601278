@@ -46,6 +46,38 @@ def run(verbose: bool = True) -> dict:
         on_demand = num(catalog_by_type()[s["gpu_type"]]["on_demand_hr"])
         idle_waste += metrics.idle_waste_usd(s["idle_hours"], on_demand)
 
+    # --- Extension 2: Right-sizing by MBU & VRAM cost ($/GB-VRAM & $/TB-BW) ---
+    vram_catalog = []
+    for gtype, cinfo in cat.items():
+        vram = num(cinfo["hbm_gb"])
+        bw = num(cinfo["peak_bw_tbs"])
+        od = num(cinfo["on_demand_hr"])
+        vram_cost = od / vram if vram > 0 else 0
+        bw_cost = od / bw if bw > 0 else 0
+        vram_catalog.append({
+            "gpu_type": gtype, "on_demand_hr": od, "hbm_gb": vram,
+            "peak_bw_tbs": bw, "usd_per_gb_hr": round(vram_cost, 4),
+            "usd_per_tb_bw_hr": round(bw_cost, 3)
+        })
+
+    mbu_rightsizing = []
+    total_rightsize_monthly_savings = 0.0
+    RIGHTSIZE_MAP = {"H100": "A100", "H200": "H100", "A100": "A10G", "A10G": "L4", "L4": "L4"}
+    for lie in lies:
+        cur_type = lie["gpu_type"]
+        rec_type = RIGHTSIZE_MAP.get(cur_type, cur_type)
+        cur_od = num(cat[cur_type]["on_demand_hr"])
+        rec_od = num(cat[rec_type]["on_demand_hr"])
+        monthly_saving = (cur_od - rec_od) * 24 * 30
+        total_rightsize_monthly_savings += max(0.0, monthly_saving)
+        mbu_rightsizing.append({
+            "gpu_id": lie["gpu_id"],
+            "current_type": cur_type,
+            "recommended_type": rec_type,
+            "current_mbu": lie["mbu"],
+            "monthly_savings_usd": round(max(0.0, monthly_saving), 2)
+        })
+
     if verbose:
         print("== M1 Efficiency Audit ==")
         print(f"{'GPU':14}{'type':7}{'util%':>7}{'MFU':>7}{'MBU':>7}{'idle_h':>8}")
@@ -54,8 +86,25 @@ def run(verbose: bool = True) -> dict:
         print(f"\nGPU-Util LIES (util>=90% but MFU<30%): {[l['gpu_id'] for l in lies]}")
         print(f"Idle waste (1 day): ${idle_waste:,.2f}  ->  ${idle_waste*30:,.0f}/month")
 
-    return {"summary": summary, "lies": lies, "idle_waste_daily": round(idle_waste, 2)}
+        print("\n--- Extension 2: Right-sizing Analysis (MBU & VRAM Economics) ---")
+        print(f"{'GPU Type':10}{'$/hr':>8}{'VRAM(GB)':>10}{'BW(TB/s)':>10}{'$/GB-VRAM/hr':>14}{'$/TB-BW/hr':>12}")
+        for v in vram_catalog:
+            print(f"{v['gpu_type']:10}${v['on_demand_hr']:>7.2f}{v['hbm_gb']:>10.0f}{v['peak_bw_tbs']:>10.2f}${v['usd_per_gb_hr']:>13.4f}${v['usd_per_tb_bw_hr']:>11.3f}")
+
+        print("\nRecommended Right-Sizing for Memory/Compute Over-provisioned GPUs:")
+        for r in mbu_rightsizing:
+            print(f"  - {r['gpu_id']} ({r['current_type']}, MBU={r['current_mbu']}) -> Right-size to {r['recommended_type']} (Saves ${r['monthly_savings_usd']:,.0f}/mo)")
+
+    return {
+        "summary": summary,
+        "lies": lies,
+        "idle_waste_daily": round(idle_waste, 2),
+        "vram_catalog": vram_catalog,
+        "mbu_rightsizing": mbu_rightsizing,
+        "rightsize_monthly_savings": total_rightsize_monthly_savings,
+    }
 
 
 if __name__ == "__main__":
     run()
+

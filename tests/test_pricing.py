@@ -32,3 +32,21 @@ def test_spot_checkpoint_saves():
     res = pricing.spot_checkpoint_cost(100, 1.5, 2.5)
     assert res["spot_cost"] < res["on_demand_cost"]
     assert res["savings_pct"] > 0
+
+
+def test_cache_is_worth_it():
+    # Break-even for default read_discount=0.1, write_surcharge=1.0 is (1 - 0.1)/(1 - 0.1) = 1.0 read
+    assert pricing.cache_is_worth_it(avg_reads=2.0) is True
+    assert pricing.cache_is_worth_it(avg_reads=0.5) is False
+    # With 25% write surcharge (1.25), break-even is (1.25 - 0.10)/(0.90) = 1.2777 reads
+    assert pricing.cache_is_worth_it(avg_reads=1.5, write_surcharge=1.25) is True
+    assert pricing.cache_is_worth_it(avg_reads=1.0, write_surcharge=1.25) is False
+
+
+def test_advanced_recommend_tier():
+    assert pricing.recommend_tier(20, False, policy="advanced") == "reserved_3yr"
+    assert pricing.recommend_tier(18, False, max_term_years=1, policy="advanced") == "reserved_1yr"
+    assert pricing.recommend_tier(4, True, policy="advanced") == "spot"
+
+
+

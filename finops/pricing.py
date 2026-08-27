@@ -60,21 +60,77 @@ def break_even_utilization(discount_frac: float) -> float:
     return max(0.0, min(1.0, 1.0 - discount_frac))
 
 
-def recommend_tier(hours_per_day: float, interruptible: bool, reserved_discount: float = 0.45) -> str:
+    return max(0.0, min(1.0, 1.0 - discount_frac))
+
+
+def cache_is_worth_it(
+    avg_reads: float,
+    write_cost_per_m: float = 3.0,
+    read_discount: float = 0.10,
+    write_surcharge: float = 1.0,
+) -> bool:
+    """Extension 3: Determines if prompt caching is economically beneficial based on avg reads.
+
+    Break-even equation:
+    Without cache: N_reads * P_in
+    With cache: (P_in * write_surcharge) + (N_reads - 1) * P_in * read_discount
+
+    Setting equality gives: N_min = (write_surcharge - read_discount) / (1.0 - read_discount).
+    Returns True if avg_reads >= break_even_reads.
+    """
+    if 1.0 - read_discount <= 0:
+        return False
+    break_even_reads = (write_surcharge - read_discount) / (1.0 - read_discount)
+    return avg_reads >= break_even_reads
+
+
+def break_even_cache_reads(read_discount: float = 0.10, write_surcharge: float = 1.0) -> float:
+    """Return the minimum average reads required to break even on prompt caching."""
+    if 1.0 - read_discount <= 0:
+        return float("inf")
+    return (write_surcharge - read_discount) / (1.0 - read_discount)
+
+
+def recommend_tier(
+    hours_per_day: float,
+    interruptible: bool,
+    reserved_discount: float = 0.45,
+    interruption_rate: float = 0.05,
+    res_1yr_discount: float = 0.30,
+    res_3yr_discount: float = 0.45,
+    max_term_years: int = 3,
+    policy: str = "standard",
+) -> str:
     """Pick a purchasing tier from a workload's duty cycle + interruptibility.
 
-    DOCUMENTED simple policy (instructor extension point — swap in your own):
+    DOCUMENTED simple policy (standard):
       - interruptible & not 24/7  -> 'spot'      (checkpoint and ride the discount)
       - duty cycle >= break-even  -> 'reserved'  (steady, high utilization)
       - otherwise                 -> 'on_demand' (spiky / low duty)
+
+    ADVANCED policy (Extension 1):
+      - Accounts for interruption rate risk on spot and compares 1yr vs 3yr commitment risk.
+      - Returns 'spot', 'reserved_3yr', 'reserved_1yr', or 'on_demand'.
     """
     duty = max(0.0, hours_per_day) / 24.0
-    be = break_even_utilization(reserved_discount)
+    be_3yr = break_even_utilization(res_3yr_discount)
+    be_1yr = break_even_utilization(res_1yr_discount)
+
+    if policy == "advanced":
+        if interruptible and hours_per_day < 24 and interruption_rate < 0.15:
+            return "spot"
+        if max_term_years >= 3 and duty >= be_3yr:
+            return "reserved_3yr"
+        elif max_term_years >= 1 and duty >= be_1yr:
+            return "reserved_1yr"
+        return "on_demand"
+
     if interruptible and hours_per_day < 24:
         return "spot"
-    if duty >= be:
+    if duty >= be_3yr:
         return "reserved"
     return "on_demand"
+
 
 
 def spot_checkpoint_cost(
@@ -102,3 +158,4 @@ def spot_checkpoint_cost(
         "on_demand_cost": round(on_demand_cost, 2),
         "savings_pct": round(savings_pct, 1),
     }
+
